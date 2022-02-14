@@ -1,12 +1,31 @@
-param ($VMName, $Domain)
+param ($VMName, $Domain, $RGName)
+
+# Clean up the RG is if it exists already
+# TODO: change this to check for everything and just update the ssl cert if
+#       everything else looks good
+$ExistingRG = Get-AzResourceGroup | Where-Object {$_.ResourceGroupName -eq $RGName}
+If ($ExistingRG) {
+    Write-Host "Resource Group " $RGName " exists, removing."
+    Remove-AzResourceGroup -Name $RGName -Force
+    # Write-Host "Done, exiting."
+    # Exit
+}
 
 # Get the vm, ipconfig, vnet
 $vm = Get-AzVm -Name $VMName
+$location = $vm.Location
 $interface = Get-AzNetworkInterface | Where-Object {$_.VirtualMachine.Id -EQ $vm.Id}
 $beipconfig = $interface.IpConfigurations | Where-Object {$_.Primary -eq "True"}
-$subnet = $interface.IpConfigurations.Subnet
-$subnetId = $subnet.Id
-$vnet = Get-AzVirtualNetwork -Name ($subnetid -split "/")[-3] # there must be a better way...
+$vmsubnet = $interface.IpConfigurations.Subnet
+# If (!$vmsubnet.AddressPrefix) {
+#     Write-Host "Oh no!"
+#     Exit
+# } Else {
+#     Write-Host "OK..."
+#     Exit
+# }
+#$subnetId = $subnet.Id
+#$vnet = Get-AzVirtualNetwork -Name ($subnetid -split "/")[-3] # there must be a better way...
 
 # Generate the cert
 $Out = "cert.pfx"
@@ -23,16 +42,27 @@ sudo chmod ugo+r $Out
 $CertPath = Resolve-Path $Out
 
 # Dummy RG so that I can destroy it quickly
-$RGName = "api-gateway-testing-quirozlarochelle"
-$RG = New-AzResourceGroup -Name $RGName -Location westus2
+$RG = New-AzResourceGroup -Name $RGName -Location $location
+
+# Create a network-y stuff for the Gateway
+$agSubnetConfig = New-AzVirtualNetworkSubnetConfig `
+  -Name myAGSubnet `
+  -AddressPrefix 10.0.2.0/24
+$vnet = New-AzVirtualNetwork `
+  -ResourceGroupName $RGName `
+  -Location $location `
+  -Name agVNet `
+  -AddressPrefix 10.0.0.0/16 `
+  -Subnet $vmsubnet,$agSubnetConfig
+
 $pip = New-AzPublicIpAddress `
   -ResourceGroupName $RGName `
-  -Location westus2 `
+  -Location $location `
   -Name "test-gateway-ip-quirozlarochelle" `
-  -AllocationMethod Static `
-  -Sku "Standard"
+  -AllocationMethod Dynamic `
+  -Sku "Basic"
 
-$gipconfig = New-AzApplicationGatewayIPConfiguration -Name "AGIPConfig" -Subnet $subnet
+$gipconfig = New-AzApplicationGatewayIPConfiguration -Name "AGIPConfig" -Subnet $agSubnetConfig
 
 $fipconfig = New-AzApplicationGatewayFrontendIPConfig -Name "AGFEIPConfig" -PublicIPAddress $pip
 
@@ -70,7 +100,7 @@ $sku = New-AzApplicationGatewaySku `
 $appgw = New-AzApplicationGateway `
   -Name myAppGateway `
   -ResourceGroupName $RGName `
-  -Location westus2`
+  -Location $location`
   -BackendAddressPools $defaultPool `
   -BackendHttpSettingsCollection $poolSettings `
   -FrontendIpConfigurations $fipconfig `
