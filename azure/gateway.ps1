@@ -7,25 +7,11 @@ $ExistingRG = Get-AzResourceGroup | Where-Object {$_.ResourceGroupName -eq $RGNa
 If ($ExistingRG) {
     Write-Host "Resource Group " $RGName " exists, removing."
     Remove-AzResourceGroup -Name $RGName -Force
-    # Write-Host "Done, exiting."
-    # Exit
 }
 
 # Get the vm, ipconfig, vnet
 $vm = Get-AzVm -Name $VMName
 $location = $vm.Location
-$interface = Get-AzNetworkInterface | Where-Object {$_.VirtualMachine.Id -EQ $vm.Id}
-$beipconfig = $interface.IpConfigurations | Where-Object {$_.Primary -eq "True"}
-$vmsubnet = $interface.IpConfigurations.Subnet
-# If (!$vmsubnet.AddressPrefix) {
-#     Write-Host "Oh no!"
-#     Exit
-# } Else {
-#     Write-Host "OK..."
-#     Exit
-# }
-#$subnetId = $subnet.Id
-#$vnet = Get-AzVirtualNetwork -Name ($subnetid -split "/")[-3] # there must be a better way...
 
 # Generate the cert
 $Out = "cert.pfx"
@@ -41,19 +27,26 @@ sudo openssl pkcs12 -export -out $Out -inkey $inkey -in $in -certfile $certfile 
 sudo chmod ugo+r $Out
 $CertPath = Resolve-Path $Out
 
-# Dummy RG so that I can destroy it quickly
 $RG = New-AzResourceGroup -Name $RGName -Location $location
 
-# Create a network-y stuff for the Gateway
-$agSubnetConfig = New-AzVirtualNetworkSubnetConfig `
-  -Name myAGSubnet `
-  -AddressPrefix 10.0.2.0/24
+# Create a network for the Gateway
 $vnet = New-AzVirtualNetwork `
   -ResourceGroupName $RGName `
   -Location $location `
   -Name agVNet `
-  -AddressPrefix 10.0.0.0/16 `
-  -Subnet $vmsubnet,$agSubnetConfig
+  -AddressPrefix 10.0.0.0/16
+Add-AzVirtualNetworkSubnetConfig `
+  -Name myAGSubnet `
+  -AddressPrefix 10.0.2.0/24 `
+  -VirtualNetwork $vnet
+Add-AzVirtualNetworkSubnetConfig `
+  -Name mybeAGSubnet `
+  -AddressPrefix 10.0.1.0/24 `
+  -VirtualNetwork $vnet
+$vnet | Set-AzVirtualNetwork
+
+$agSubnetConfig = Get-AzVirtualNetworkSubnetConfig -Name myAgSubnet -VirtualNetwork $vnet
+$vmSubnetConfig = Get-AzVirtualNetworkSubnetConfig -Name mybeAGSubnet -VirtualNetwork $vnet
 
 $pip = New-AzPublicIpAddress `
   -ResourceGroupName $RGName `
